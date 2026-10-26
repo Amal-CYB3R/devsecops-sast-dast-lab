@@ -36,10 +36,10 @@ jobs:
         run: |
           docker network create lab
           docker build -t vulnapp ./app
-          docker run -d --name vulnapp --network lab vulnapp
+          docker run -d --name vulnapp --network lab -p 127.0.0.1:5000:5000 vulnapp
 
           for i in $(seq 1 30); do
-            if curl -fsS http://vulnapp:5000/ >/dev/null; then
+            if curl -fsS http://127.0.0.1:5000/ >/dev/null; then
               echo "Application is ready"
               exit 0
             fi
