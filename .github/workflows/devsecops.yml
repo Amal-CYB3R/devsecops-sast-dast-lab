@@ -23,3 +23,50 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  dast:
+    name: DAST - OWASP ZAP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and start the application
+        run: |
+          docker network create lab
+          docker build -t vulnapp ./app
+          docker run -d --name vulnapp --network lab vulnapp
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://vulnapp:5000/ >/dev/null; then
+              echo "Application is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Application failed to become ready"
+          docker logs vulnapp
+          exit 1
+
+      - name: Run ZAP baseline scan
+        run: |
+          mkdir -p reports
+          chmod 777 reports
+
+          docker run --rm --network lab \
+            -v "$PWD/reports:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://vulnapp:5000 \
+            -r zap-baseline.html
+        continue-on-error: true
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-baseline-report
+          path: reports/zap-baseline.html
+          if-no-files-found: warn
