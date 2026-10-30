@@ -1,8 +1,12 @@
-import sqlite3, hashlib, subprocess
-from flask import Flask, request
+import sqlite3, hashlib, subprocess, os
+from flask import Flask, request,session
+from markupsafe import escape
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-SECRET_KEY = "fake-demo-secret-123"      # VULN 1: hard-coded secret (A02)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY")
+if not app.secret_key:
+    raise RuntimeError("FLASK_SECRET_KEY environment variable is required")
 DB = "users.db"
 
 def get_db():
@@ -11,7 +15,7 @@ def get_db():
 def init_db():
     con = get_db()
     con.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT, password TEXT)")
-    pw = hashlib.md5(b"password123").hexdigest()
+    pw = generate_password_hash("password123")
     con.execute("INSERT OR IGNORE INTO users(id, username, password) VALUES (1,'admin',?)", (pw,))
     con.commit()
 
@@ -34,26 +38,52 @@ def home():
 def login():
     u = request.form.get("username", "")
     p = request.form.get("password", "")
-    hashed = hashlib.md5(p.encode()).hexdigest()                       # VULN 2: weak hash (A02)
-    q = "SELECT * FROM users WHERE username='" + u + "' AND password='" + hashed + "'"  # VULN 3: SQL injection (A03)
-    row = get_db().execute(q).fetchone()
-    return "Welcome" if row else "Invalid credentials"
+    hashed = hashlib.md5(p.encode()).hexdigest()
+
+    q = "SELECT * FROM users WHERE username=?"
+    row = get_db().execute(q, (u,)).fetchone()
+
+    if row and check_password_hash(row[2], p):
+        session["user_id"] = row[0]
+        return "Welcome"
+
+    return "Invalid credentials"
 
 @app.route("/search")
 def search():
     term = request.args.get("q", "")
-    return "<h1>Results for " + term + "</h1>"                          # VULN 4: reflected XSS (A03)
+    return "<h1>Results for " + str(escape(term)) + "</h1>"
 
 @app.route("/ping")
 def ping():
     host = request.args.get("host", "127.0.0.1")
-    return subprocess.getoutput("ping -c 1 " + host)                    # VULN 5: command injection (A03)
+
+    try:
+        result = subprocess.run(
+            ["ping", "-c", "1", host],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False
+        )
+        return result.stdout + result.stderr
+    except subprocess.TimeoutExpired:
+        return "Ping timed out", 400
 
 @app.route("/user/<int:uid>")
-def user(uid):                                                          # VULN 6: no access control / IDOR (A01)
-    row = get_db().execute("SELECT id, username FROM users WHERE id=" + str(uid)).fetchone()
-    return str(row)
+def user(uid):
+    if "user_id" not in session:
+        return "Please log in first", 401
 
+    if session["user_id"] != uid:
+        return "Access denied", 403
+
+    row = get_db().execute(
+        "SELECT id, username FROM users WHERE id=?",
+        (uid,)
+    ).fetchone()
+
+    return str(row) if row else ("User not found", 404)
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=5000, debug=True)                      # VULN 7: debug mode on (A05)
+    app.run(host="0.0.0.0", port=5000, debug=False)
