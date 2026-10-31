@@ -1,2 +1,4 @@
-flask==2.2.5
-werkzeug==2.2.3
+flask==3.0.3
+werkzeug==3.0.3
+Flask-WTF==1.2.2
+gunicorn==23.0.0
